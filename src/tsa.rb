@@ -2,8 +2,6 @@
 # coding: utf-8
  
 require 'twitter'
-require 'oauth'
-
 
 #-------------------------------------------------------
 # Global
