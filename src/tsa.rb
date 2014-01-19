@@ -2,17 +2,16 @@
 # coding: utf-8
  
 require 'twitter'
-require 'date'
+require 'time'
+require 'sqlite3'
+require 'pp'
 
 #-------------------------------------------------------
 # Global
 #-------------------------------------------------------
-ckey     = "YOUR_CONSUMER_KEY in tsa.sec"
-csecret  = "YOUR_CONSUMER_SECRET in tsa.sec"
-atoken   = "YOUR_ACCESS_TOKEN in tsa.sec"
-atsecret = "YOUR_ACCESS_SECRET in tsa.sec"
 
-flag_week = true
+stop_year     = 2012
+numOfMaxRetry = 15
 
 #-------------------------------------------------------
 # Local methods
@@ -50,6 +49,107 @@ def parseKeyFile(name)
   }
   return keys
 end
+
+def getTweets( client, userid, tweetid )
+  tweet = Array.new
+  if tweetid == 0
+    tweet = client.user_timeline( userid, {:count => 200 } )
+  else
+    tweet = client.user_timeline( userid, {:count => 200, :max_id => tweetid} )
+  end
+  return tweet
+end
+
+def getDatabase( userid ) 
+  return SQLite3::Database.new("TSA."+userid+".sqlite3") 
+end
+
+def makeDatabaseTable( database )
+  
+  sql = <<-SQL
+  SELECT COUNT(*)
+  FROM sqlite_master
+  WHERE type='table' AND name='tweet_table'
+  SQL
+  
+  
+  if database.execute( sql ) == "" 
+    sql = <<-SQL
+    CREATE TABLE tweet_table (
+      id       INTEGER PRIMARY KEY AUTOINCREMENT,
+      name     TEXT NOT NULL,
+      date     TEXT NOT NULL,
+      tweetid  INTEGER NOT NULL UNIQUE,
+      tweet    TEXT NOT NULL
+    );
+    SQL
+    
+    database.execute( sql )    
+  end
+  
+end
+
+def addDataToDatabase( database, hdata )
+  
+  sql = <<-SQL
+  INSERT INTO tweet_table ( name,
+                            date,
+                            tweetid,
+                            tweet )
+              VALUES      (
+                            ?,
+                            ?,
+                            ?,
+                            ?
+                          );
+  SQL
+
+  database.execute( sql, hdata )
+  
+end
+
+def getMinTweetID( database )
+
+  sql = <<-SQL
+  SELECT MIN( tweetid ) FROM tweet_table 
+  SQL
+
+  text = nil
+  database.execute( sql ){ |row|
+    text = row
+  }
+
+  if text == nil
+    text = [0]
+  end
+  
+  return text[0].to_i
+end
+
+def getMinTweetYear( database )
+
+  sql = <<-SQL
+  SELECT MIN( date ) FROM tweet_table 
+  SQL
+
+  text = ""
+  database.execute( sql ){ |row|
+    text = row
+  }
+
+  return Time.parse( text[0] ).year
+end
+
+def hasTweetID?( database, tweetid )
+
+  sql = <<-SQL
+  SELECT * FROM tweet_table WHERE tweetid == #{tweetid};
+  SQL
+  
+  return ( database.execute( sql ).size > 0 )? true : false
+end
+
+
 #-------------------------------------------------------
 # Main
 #-------------------------------------------------------
@@ -63,20 +163,47 @@ client = Twitter::REST::Client.new do |config|
   config.access_token_secret = keys["atsecret"]    
 end
 
-#get the tweets
-tweets = client.user_timeline( "iprettygetter", {:count => 200, :max_id => 423044343243345921} )
+#Get the tweets
+userid = "iprettygetter"
 
 #
-if flag_week 
-  p tweets.size
-  tweets.each{ |tweet|
-    if /.*【(.*)】.*出勤.*/ =~ tweet.text
-      weekday     = tweet.created_at.wday
-      person_name = tweet.text.gsub(/.*【(.*)】.*出勤.*/, '\1' )
-      
-      if /まゆみ/ =~ person_name 
-        printf( "%s <> %s <> %s <> %s\n",  weekday,  person_name, tweet.created_at, tweet.id )
-      end
-    end
-  }
+database = getDatabase( userid )
+makeDatabaseTable( database )
+tweets = Array.new
+
+numOfRetry = 0
+begin
+  year = Time.now.year
+  while year > stop_year or numOfRetry < numOfMaxRetry
+    tweets += getTweets( client, userid, getMinTweetID( database )[0] )
+    year = getMinTweetYear( database )
+    printf( "Getting tweet now (%d) \n", year )
+    numOfRetry += 1
+  end
+rescue => errCode
+   p "[Resque]"
+   p errCode
+   p getMinTweetYear( database )
+   p ""
 end
+
+printf( "Add the tweets to the data base.\n" )
+database.execute( "BEGIN TRANSACTION" )
+tweets.each { |tweet|
+  if /.*【(.*)】.*出勤.*/ =~ tweet.text
+    name    = tweet.text.gsub(/.*【(.*)】.*出勤.*/, '\1' )
+    date    = tweet.created_at.to_s
+    tweetid = tweet.id
+    tweet   = tweet.text
+    
+    if not hasTweetID?( database, tweetid ) 
+      addDataToDatabase( database, [name,date,tweetid,tweet] )
+    end
+  end
+}
+database.execute( "COMMIT TRANSACTION" )
+database.close
+printf( "Done!\n" )
+
+
+
