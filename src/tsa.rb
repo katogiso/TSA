@@ -123,7 +123,7 @@ def getMinTweetID( database )
     text = [0]
   end
   
-  return text[0].to_i
+  return text[0]
 end
 
 def getMinTweetYear( database )
@@ -149,6 +149,23 @@ def hasTweetID?( database, tweetid )
   return ( database.execute( sql ).size > 0 )? true : false
 end
 
+def addTweets( database, tweets )
+  printf( "Add the tweets to the data base.\n" )
+  database.execute( "BEGIN TRANSACTION" )
+  tweets.each { |tweet|
+    if /.*【(.*)】.*出勤.*/ =~ tweet.text
+      name    = tweet.text.gsub(/.*【(.*)】.*出勤.*/, '\1' )
+      date    = tweet.created_at.to_s
+      tweetid = tweet.id
+      tweet   = tweet.text
+      
+      if not hasTweetID?( database, tweetid ) 
+        addDataToDatabase( database, [name,date,tweetid,tweet] )
+      end
+    end
+  }
+  database.execute( "COMMIT TRANSACTION" )
+end
 
 #-------------------------------------------------------
 # Main
@@ -169,16 +186,25 @@ userid = "iprettygetter"
 #
 database = getDatabase( userid )
 makeDatabaseTable( database )
-tweets = Array.new
+database.close
 
 numOfRetry = 0
 begin
   year = Time.now.year
-  while year > stop_year or numOfRetry < numOfMaxRetry
-    tweets += getTweets( client, userid, getMinTweetID( database )[0] )
-    year = getMinTweetYear( database )
-    printf( "Getting tweet now (%d) \n", year )
+  while year > stop_year and numOfRetry < numOfMaxRetry
+    
+    database = getDatabase( userid )
+    printf( "Getting tweet now (%d) %d times id= %d\n", year, numOfRetry, getMinTweetID( database ))
+    tweets = getTweets( client, userid, getMinTweetID( database ))
+    addTweets( database, tweets )
+    database.close
+    
+    database = getDatabase( userid )    
+    year     = getMinTweetYear( database )
+    database.close
+    
     numOfRetry += 1
+    sleep(60)
   end
 rescue => errCode
    p "[Resque]"
@@ -187,22 +213,6 @@ rescue => errCode
    p ""
 end
 
-printf( "Add the tweets to the data base.\n" )
-database.execute( "BEGIN TRANSACTION" )
-tweets.each { |tweet|
-  if /.*【(.*)】.*出勤.*/ =~ tweet.text
-    name    = tweet.text.gsub(/.*【(.*)】.*出勤.*/, '\1' )
-    date    = tweet.created_at.to_s
-    tweetid = tweet.id
-    tweet   = tweet.text
-    
-    if not hasTweetID?( database, tweetid ) 
-      addDataToDatabase( database, [name,date,tweetid,tweet] )
-    end
-  end
-}
-database.execute( "COMMIT TRANSACTION" )
-database.close
 printf( "Done!\n" )
 
 
