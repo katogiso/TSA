@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  
+  <head>
+    <title>Bar Chart</title>
+    
+    <script src="Chart.js"></script>
+    <script type="text/javascript" language="JavaScript" src="data.js"></script>
+    <meta name = "viewport" content = "initial-scale = 1, user-scalable = no">
+    
+    <style>
+      canvas{
+      }
+    </style>
+    
+  </head>
+  
+  <body>
+    <canvas id="canvas" height="450" width="600"></canvas>
+
+    <script>    
+      var myLine = new Chart(document.getElementById("canvas").getContext("2d")).Bar(barChartData);
+    </script>
+  </body>
+</html>

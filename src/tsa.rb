@@ -12,6 +12,12 @@ require 'pp'
 
 stop_year     = 2012
 numOfMaxRetry = 100
+full_mode     = true
+
+regexChan = "(ﾁｬﾝ)|(ちゃん)"
+regexPre  = "】(#{regexChan})"
+regexPost = "(#{regexChan})】"
+regexName = "(#{regexPost})|(#{regexPre})"
 
 #-------------------------------------------------------
 # Local methods
@@ -67,13 +73,15 @@ end
 def makeDatabaseTable( database )
   
   sql = <<-SQL
-  SELECT COUNT(*)
+  SELECT tbl_name 
   FROM sqlite_master
-  WHERE type='table' AND name='tweet_table'
+  WHERE type=='table' 
   SQL
   
+  tables = database.execute( sql ).flatten
   
-  if database.execute( sql ) == "" 
+  if not tables.include?("tweet_table")
+    
     sql = <<-SQL
     CREATE TABLE tweet_table (
       id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +119,12 @@ end
 def getMinTweetID( database )
 
   sql = <<-SQL
+  SELECT COUNT(*) FROM tweet_table 
+  SQL
+
+  is_there = database.execute( sql )[0]
+    
+  sql = <<-SQL
   SELECT MIN( tweetid ) FROM tweet_table 
   SQL
 
@@ -119,11 +133,8 @@ def getMinTweetID( database )
     text = row
   }
 
-  if text == nil
-    text = [0]
-  end
+  return (is_there[0] > 0)? text[0] : 0
   
-  return text[0]
 end
 
 def getMinTweetYear( database )
@@ -137,7 +148,8 @@ def getMinTweetYear( database )
     text = row
   }
 
-  return Time.parse( text[0] ).year
+  return (text[0] != nil )? Time.parse( text[0] ).year : 0
+  
 end
 
 def hasTweetID?( database, tweetid )
@@ -149,23 +161,65 @@ def hasTweetID?( database, tweetid )
   return ( database.execute( sql ).size > 0 )? true : false
 end
 
-def addTweets( database, tweets )
+def addTweets( database, tweets, regexName )
+  lastid = 0
   printf( "Add the tweets to the data base.\n" )
   database.execute( "BEGIN TRANSACTION" )
   tweets.each { |tweet|
+    
     if /.*【(.*)】.*出勤.*/ =~ tweet.text
-      name    = tweet.text.gsub(/.*【(.*)】.*出勤.*/, '\1' )
-      date    = tweet.created_at.to_s
-      tweetid = tweet.id
-      tweet   = tweet.text
-      
+
+      name      = tweet.text.gsub(/^.*【(.*?)(#{regexName}).*$/m, '\1' )
+      date      = tweet.created_at.to_s
+      tweetid   = tweet.id
+      tweetfull = tweet.text
+    
       if not hasTweetID?( database, tweetid ) 
-        addDataToDatabase( database, [name,date,tweetid,tweet] )
+        addDataToDatabase( database, [name,date,tweetid,tweetfull] )
       end
     end
+    
+    lastid = tweet.id
   }
   database.execute( "COMMIT TRANSACTION" )
+  
+  return lastid
 end
+
+def addAllTweets( database, tweets, regexName )
+  lastid = 0
+  printf( "Add the all tweets to the data base.\n" )
+  database.execute( "BEGIN TRANSACTION" )
+  tweets.each { |tweet|
+    
+    if /.*【(.*)】.*出勤.*/ =~ tweet.text
+
+      name      = tweet.text.gsub(/^.*【(.*?)(#{regexName}).*$/m, '\1' )
+      date      = tweet.created_at.to_s
+      tweetid   = tweet.id
+      tweetfull = tweet.text
+    
+      if not hasTweetID?( database, tweetid ) 
+        addDataToDatabase( database, [name,date,tweetid,tweetfull] )
+      end
+    else
+      name      = "NONAME"
+      date      = tweet.created_at.to_s
+      tweetid   = tweet.id
+      tweetfull = tweet.text
+      
+      if not hasTweetID?( database, tweetid ) 
+        addDataToDatabase( database, [name,date,tweetid,tweetfull] )
+      end      
+    end
+    
+    lastid = tweet.id
+  }
+  database.execute( "COMMIT TRANSACTION" )
+  
+  return lastid
+end
+
 
 #-------------------------------------------------------
 # Main
@@ -189,14 +243,29 @@ makeDatabaseTable( database )
 database.close
 
 numOfRetry = 0
+lastid     = 0
+
 begin
   year = Time.now.year
   while year > stop_year and numOfRetry < numOfMaxRetry
+
+    if numOfRetry == 0
+      database = getDatabase( userid )
+      lastid = getMinTweetID( database )
+      database.close      
+    end
     
     database = getDatabase( userid )
-    printf( "Getting tweet now (%d) %d times id= %d\n", year, numOfRetry, getMinTweetID( database ))
-    tweets = getTweets( client, userid, getMinTweetID( database ))
-    addTweets( database, tweets )
+    printf( "Getting tweet now (%d) %d times id= %d\n",
+            year, numOfRetry, lastid)
+    
+    tweets = getTweets( client,   userid, lastid    )
+    
+    if full_mode
+      lastid = addAllTweets( database, tweets, regexName )      
+    else
+      lastid = addTweets( database, tweets, regexName )
+    end
     database.close
     
     database = getDatabase( userid )    
